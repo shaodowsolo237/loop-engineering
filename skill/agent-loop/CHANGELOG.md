@@ -11,6 +11,93 @@ tweak that changes nothing about the interface.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-07-07
+
+Cost ceilings, permission scoping, and assert design. Honest-TDD note: five
+additions were approved; two were dropped because their baseline scenarios
+PASSED (writing-skills rule: no failing test, no guidance). A stall-triage
+checklist and a "freeze deterministic steps into scripts" note proved
+redundant — agents (even haiku) derived correct stall triage from the
+anti-patterns list, and baked the recurring codemod+format step into the gate
+script unprompted, reasoning "the verify command is the only mechanism
+guaranteed to execute every iteration."
+
+### Added
+- **`verify-loop.sh --max-cost USD`** — a dollar ceiling alongside `--max`:
+  sums each iteration's reported `total_cost_usd` (resumed calls now also run
+  `--output-format json`) and bails exit 1 once the cap is crossed. Tested
+  against a mocked `claude` binary: bails at cap, under-cap unaffected,
+  no-flag behavior unchanged, red-first guard intact.
+- **Permission scoping in the 60-second setup**: if supervision is background,
+  also decide what the loop may do alone — scope `--allowedTools`/permissions
+  to the minimum (an overnight loop rarely needs push, network, or rm).
+  Baseline: an overnight-loop setup took the default toolset with zero
+  deliberation; re-test reasons about the minimum explicitly.
+- **gates.md "Designing the asserts"**: force outcomes not shape, assert the
+  critical class separately (aggregate accuracy hides the class that matters),
+  direction-of-change relations for fuzzy outputs, free-riding invariants.
+  Baseline (haiku): a triage-pipeline gate asserted "retrieval returned ≥1
+  doc" and only aggregate accuracy — the exact "completion and shape" trap
+  from the v0.6.0 six-defect hunt. Frontier baselines passed this scenario;
+  the note exists for the cheaper models loops route mechanical work to.
+
+### Verified
+- 5-rep scenario suite per decision (fable + haiku, every result read
+  manually): stall-triage drop 5/5 (all reps validate gate + signal before
+  escalating); codemod-in-gate drop 5/5 (all reps bake the recurring step into
+  the verify command); assert-design note binding on haiku 5/5 (4 reps produce
+  all four elements, all 5 pin the critical class + grounding invariant);
+  permission scoping 5/5 behavioral, 4/5 with explicit deliberation. Bonus:
+  4/5 overnight-loop reps adopted `--max-cost` unprompted.
+- `--max-cost`: 4/4 mocked-`claude` tests; shellcheck: pre-existing info note
+  only; `verify-loop.sh` at 171/200 lines.
+
+## [0.7.0] — 2026-07-07
+
+Loop-type selection, aligned with the Claude Code team's taxonomy (Anthropic's
+"Getting started with loops"): turn-based / goal-based / time-based / proactive,
+selected by **which piece of the work you hand off** — the check, the stop
+condition, the trigger, or the prompt itself. Baseline-tested per the
+writing-skills TDD process: 4 selection scenarios run against v0.6.0 first.
+
+### Added
+- `references/choosing.md` — the four loop types with trigger, stop criteria,
+  primitive mapping, and a token lever per type; plus the escalation ladder
+  ("start at the top row; move down only when the current row can't hold the job").
+- **The don't-loop off-ramp** (SKILL.md): if the work doesn't recur and one
+  attempt — gate run once at the end — would plausibly reach the goal, run a
+  single verified turn instead of building loop machinery. Baseline failure: a
+  "add a like button and make sure it works" request was routed into `/goal`.
+- **Proactive composition** (SKILL.md table + choosing.md): a recurring stream of
+  well-defined work = `/schedule` trigger + `/goal` per-run done + skills to
+  verify + workflows for fan-out, output kept as reviewable candidates.
+- Frontmatter trigger: "which loop type or primitive fits" questions
+  ("/goal or /loop?", "do I even need a loop for this?").
+- **Turn-based verification names the bundled `/verify` skill** (v2.1.145+,
+  confirmed against the current skills doc) with `/run-skill-generator` for
+  project-specific launches; a custom verification skill remains the path for
+  checks that are yours alone. Baseline: agents hand-rolled verification plans
+  and never reached for `/verify`.
+
+### Changed
+- **"Pick the primitive" → "Pick the loop type, then the primitive"**: the table
+  is now keyed on what you hand off, and the `/goal` row documents the explicit
+  turn cap (`, stop after N tries`). Baseline failure: an agent picked
+  `verify-loop.sh` for "give up after 5 attempts" *because* the skill nowhere
+  said `/goal` takes a cap — primitives.md now states "you don't need
+  `verify-loop.sh` just to get a ceiling" and that bare `/goal` reports
+  turns + token usage.
+- primitives.md: `/loop` marked session-scoped ("machine off, loop off");
+  cloud routines named as `/schedule`; mapping table gains the
+  "not every task is a loop" row.
+
+### Verified
+- All 4 selection scenarios re-run against v0.7.0: single-turn task → no loop;
+  laptop-off schedule → `/schedule` routine; capped score goal → `/goal … stop
+  after 5 tries`; around-the-clock feedback stream → proactive composition.
+  Plus a variant one-shot task not named in the docs, to rule out
+  example-matching.
+
 ## [0.6.0] — 2026-07-06
 
 Two anti-patterns from a real six-defect hunt (each bug peeled at ~35 min/iteration):

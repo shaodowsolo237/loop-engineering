@@ -1,7 +1,7 @@
 ---
 name: agent-loop
-version: 0.6.0
-description: Use whenever the user wants Claude to keep working on its own until a goal holds: "run a loop", "loop until the tests pass", "keep going until the build is green", "fix all of these until the suite is clean", "babysit this until it's done", "run this autonomously", "set up a self-verifying loop", "iterate until X", or references agent loops / loop engineering / Boris Cherny's "I write loops" methodology. Trigger even when the user never says the word "loop" — any "keep doing X until condition Y holds, then stop" request is a loop. Also use for a large multi-stage objective — "create user manuals", "break this objective into steps", "turn this into a pipeline of loops", or any deliverable whose stages fan out over many items (one loop per page, screen, or endpoint).
+version: 0.8.0
+description: Use whenever the user wants Claude to keep working on its own until a goal holds: "run a loop", "loop until the tests pass", "keep going until the build is green", "fix all of these until the suite is clean", "babysit this until it's done", "run this autonomously", "set up a self-verifying loop", "iterate until X", or references agent loops / loop engineering / Boris Cherny's "I write loops" methodology. Trigger even when the user never says the word "loop" — any "keep doing X until condition Y holds, then stop" request is a loop. Also use for a large multi-stage objective — "create user manuals", "break this objective into steps", "turn this into a pipeline of loops", or any deliverable whose stages fan out over many items (one loop per page, screen, or endpoint). Also use when the user asks which loop type or primitive fits a task — "/goal or /loop?", "should this be a schedule/routine?", "do I even need a loop for this?".
 argument-hint: [goal, e.g. "all tests in api/ pass and lint is clean"]
 ---
 
@@ -71,33 +71,45 @@ the loop until the gate and ceiling exist.
    `go test`, `cargo test`, or the CI workflow. Prefer "can the agent actually run
    the thing" (tests, a smoke run, a headless browser) over lint-only — lint passing
    says nothing about whether the code works.
-3. **Budget ceiling** — a max iteration count (and/or token budget). This is what
-   makes a loop safe to leave unattended. No ceiling, no unattended loop.
+3. **Budget ceiling** — a max iteration count and, for unattended runs, a dollar
+   cap (`verify-loop.sh --max-cost USD` sums each iteration's reported cost).
+   This is what makes a loop safe to leave unattended. No ceiling, no unattended loop.
 4. **Isolation** — if the loop runs alongside other work, give it its own git
    worktree so parallel changes don't collide (`claude --worktree <name>`).
 5. **Supervision** — attended (watch it) or background (notify on done/stuck).
-   Decide up front; it changes which primitive you pick.
+   Decide up front; it changes which primitive you pick. If background: also
+   decide what the loop may do alone — scope `--allowedTools`/permissions to the
+   minimum the goal needs (an overnight loop rarely needs push, network, or rm).
 
-## Pick the primitive
+## Pick the loop type, then the primitive
 
-| Situation | Use | Why |
-|---|---|---|
-| Simplest, in-session, one goal | **`/goal <condition>`** | Claude loops turn after turn until a small fast model confirms the condition. Works headless too. Start here. |
-| Scriptable / headless / CI / a budget you control | **`scripts/verify-loop.sh`** (a `claude -p` while-loop with a verify gate) | You own the control flow, the ceiling, and the failure handling. |
-| Deterministic "don't stop until green" | **Stop hook** (command hook: exit 2 blocks the stop; prompt/agent hook: return `{"ok": false}`) | The same mechanism `/goal` wraps; use it when you need custom termination logic. |
-| Recurring / watch-for-work / runs while you're away | **`/loop`** (interval) or a cloud routine | "Every 30m, draft fix PRs for new bug issues." Polls or schedules instead of running once. |
-| A step with NO objective check (prose, design, "is this good enough?") | **`scripts/judge-loop.sh`** (LLM-judge gate) | A *separate* Claude scores the result against a rubric and returns pass/fail — independent verification when no shell command can decide. |
+Decide **which piece of the work you're handing off** — that picks the loop type,
+and the primitive follows. **If the work doesn't recur and one attempt — with the
+gate run once at the end — would plausibly reach the goal, don't build a loop:**
+run the turn, run the gate, hand back the result. Reach for the bundled `/verify`
+skill (v2.1.145+) or a project verification skill that encodes the manual check —
+not loop machinery.
 
-Read `references/primitives.md` for the exact flags, caveats, and doc links for each
-of these. Confirm flags against current Claude Code docs — they change between
-versions.
+| You hand off | Type | Use | Why |
+|---|---|---|---|
+| The stop condition | Goal-based | **`/goal <condition>, stop after N tries`** | Claude loops turn after turn until a small fast model confirms the condition; takes an explicit turn cap. Works headless too. Start here. |
+| … with your own control flow | Goal-based | **`scripts/verify-loop.sh`** (a `claude -p` while-loop with a verify gate) | You own the ceiling, stall/reset/escalation handling — headless / CI. |
+| … with custom stop logic | Goal-based | **Stop hook** (command hook: exit 2 blocks the stop; prompt/agent hook: return `{"ok": false}`) | The same mechanism `/goal` wraps. |
+| The trigger | Time-based | **`/loop <interval>`** (session-scoped) or a cloud routine via **`/schedule`** (survives your machine being off) | "Every 30m, draft fix PRs for new bug issues." Polls or schedules instead of running once. |
+| The prompt itself | Proactive | **Compose:** `/schedule` trigger + `/goal` per-run done + skills to verify + workflows for fan-out | A recurring stream of well-defined work (reports, triage, migrations) with no human in real time. |
+| A step with NO objective check | any | **`scripts/judge-loop.sh`** (LLM-judge gate) | A *separate* Claude scores the result against a rubric — independent verification when no shell command can decide. Orthogonal to loop type. |
+
+Read `references/choosing.md` for the full taxonomy (trigger, stop criteria, and
+token levers per type) and `references/primitives.md` for the exact flags,
+caveats, and doc links. Confirm flags against current Claude Code docs — they
+change between versions.
 
 ## Run the loop
 
 **In-session (default):** state the goal as a condition and hand it to `/goal`:
 
 ```
-/goal all tests in test/auth pass and the lint step is clean
+/goal all tests in test/auth pass and the lint step is clean, stop after 10 tries
 ```
 
 **Headless / scriptable:** use the bundled script. It runs the verify command,
@@ -122,7 +134,8 @@ loop that fails differently each round); `--reset-every N` drops the session for
 eyes when an approach entrenches; `--escalate-model M` makes a last-ditch stronger-model
 attempt before a stall bail; `--worktree PATH` runs the loop on a throwaway branch;
 `--log DIR` writes each iteration's verify output + diff as an audit trail;
-`--allow-green-start` skips the red-first guard.
+`--allow-green-start` skips the red-first guard; `--max-cost USD` bails once the
+summed per-iteration cost (claude's reported `total_cost_usd`) crosses the cap.
 
 ## Stay in the judgment seat
 
@@ -200,6 +213,7 @@ planner procedure, and a worked user-manual example before building a chain.**
 
 ## Reference
 
+- `references/choosing.md` — the four loop types (turn/goal/time/proactive): what you hand off, trigger, stop criteria, token levers.
 - `references/gates.md` — gate hygiene: the visual-judge recipe + flaky-gate diagnosis playbook.
 - `references/chains.md` — loop-chain schemas, runtime, planner procedure, example.
 - `references/loop-chains-design.md` — the approved design spec for loop chains.
